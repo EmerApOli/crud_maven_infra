@@ -35,7 +35,7 @@ jobs:
           for environment in local uat production; do
             kubectl kustomize "infra/overlays/$environment" > "/tmp/$environment.yaml"
           done
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: test-reports
@@ -70,7 +70,7 @@ jobs:
             '{image: $image, sha: $sha, build_run_id: $build_run_id}' > release.json
           echo "Imagem: $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
           echo "CI run ID: $GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: github.event_name == 'push'
         with:
           name: release

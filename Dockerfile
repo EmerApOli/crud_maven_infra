@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:25-jre-jammy
 WORKDIR /app
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app
 COPY --chown=10001:10001 target/app.jar app.jar

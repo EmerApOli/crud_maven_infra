@@ -1,0 +1,116 @@
+name: Deploy reutilizável
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      build_run_id:
+        type: string
+        required: true
+      uat_run_id:
+        type: string
+        default: ''
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TARGET: ${{ inputs.environment }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      UAT_RUN_ID: ${{ inputs.uat_run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validar origem da versão e promoção
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET" == uat || "$TARGET" == production ]]
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN_ID" > /tmp/ci-run.json
+          jq -e '.conclusion == "success" and .head_branch == "main" and .event == "push" and .path == ".github/workflows/ci.yaml"' /tmp/ci-run.json
+          gh run download "$BUILD_RUN_ID" --name release --dir /tmp/release
+          jq -e --arg run "$BUILD_RUN_ID" --arg sha "$(jq -r .head_sha /tmp/ci-run.json)" \
+            '.build_run_id == $run and .sha == $sha' /tmp/release/release.json
+          IMAGE=$(jq -r .image /tmp/release/release.json)
+          EXPECTED="ghcr.io/${GH_REPO,,}@sha256:"
+          [[ "$IMAGE" == "$EXPECTED"* ]]
+          DIGEST="${IMAGE#"$EXPECTED"}"
+          [[ "$DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          if [[ "$TARGET" == production ]]; then
+            [[ "$UAT_RUN_ID" =~ ^[0-9]+$ ]]
+            gh api "repos/$GH_REPO/actions/runs/$UAT_RUN_ID" > /tmp/uat-run.json
+            jq -e '.conclusion == "success" and .head_branch == "main" and .event == "workflow_dispatch" and .path == ".github/workflows/cd.yaml"' /tmp/uat-run.json
+            gh run download "$UAT_RUN_ID" --name uat-release --dir /tmp/uat
+            cmp /tmp/release/release.json /tmp/uat/release.json
+          fi
+          echo "DEPLOY_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: github-${{ github.run_id }}
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede
+        with:
+          version: v1.34.1
+      - name: Acessar cluster EKS
+        env:
+          EKS_CLUSTER: ${{ vars.EKS_CLUSTER_NAME }}
+        run: |
+          set -euo pipefail
+          aws eks update-kubeconfig --name "$EKS_CLUSTER" --kubeconfig "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+      - name: Renderizar e validar antes do deploy
+        run: |
+          set -euo pipefail
+          mkdir -p infra/release
+          cat > infra/release/kustomization.yaml <<EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+            - ../overlays/$TARGET
+          images:
+            - name: crud-app
+              newName: ${DEPLOY_IMAGE%@*}
+              digest: ${DEPLOY_IMAGE#*@}
+          EOF
+          kubectl kustomize infra/release > "$RUNNER_TEMP/rendered.yaml"
+          kubectl -n "crud-$TARGET" apply --dry-run=server -f "$RUNNER_TEMP/rendered.yaml"
+      - name: Aplicar e aguardar rollout
+        run: |
+          set -euo pipefail
+          kubectl -n "crud-$TARGET" apply -f "$RUNNER_TEMP/rendered.yaml"
+          kubectl -n "crud-$TARGET" rollout status deployment/crud --timeout=300s
+          echo "Ambiente: $TARGET; imagem: $DEPLOY_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+      - name: Diagnóstico de falha
+        if: failure()
+        run: |
+          kubectl -n "crud-$TARGET" get deployment,pods || true
+          kubectl -n "crud-$TARGET" get events --sort-by=.lastTimestamp || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: success() && inputs.environment == 'uat'
+        with:
+          name: uat-release
+          path: /tmp/release/release.json
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: success()
+        with:
+          name: manifests-${{ inputs.environment }}
+          path: ${{ runner.temp }}/rendered.yaml
+          retention-days: 90
+      - name: Limpar credencial temporária
+        if: always()
+        run: rm -f "$RUNNER_TEMP/kubeconfig"

@@ -1,0 +1,30 @@
+name: CD
+run-name: Deploy ${{ inputs.environment }} - CI ${{ inputs.build_run_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente de destino
+        type: choice
+        options: [uat, production]
+        required: true
+      build_run_id:
+        description: ID da execução CI aprovada (mesma imagem em todos os ambientes)
+        type: string
+        required: true
+      uat_run_id:
+        description: Para produção, ID do CD UAT bem-sucedido dessa versão
+        type: string
+        required: false
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yaml
+    with:
+      environment: ${{ inputs.environment }}
+      build_run_id: ${{ inputs.build_run_id }}
+      uat_run_id: ${{ inputs.uat_run_id }}

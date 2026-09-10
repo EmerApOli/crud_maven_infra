@@ -1,0 +1,78 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Testar, migrar e empacotar
+        run: ./mvnw -B -ntp verify
+      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede
+        with:
+          version: v1.34.1
+      - name: Renderizar manifests
+        run: |
+          for environment in local uat production; do
+            kubectl kustomize "infra/overlays/$environment" > "/tmp/$environment.yaml"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: test-reports
+          path: target/*-reports/
+          retention-days: 14
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Nome da imagem
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        id: build
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+      - name: Registrar versão imutável
+        if: github.event_name == 'push'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          jq -n --arg image "$IMAGE@$DIGEST" --arg sha "$GITHUB_SHA" \
+            --arg build_run_id "$GITHUB_RUN_ID" \
+            '{image: $image, sha: $sha, build_run_id: $build_run_id}' > release.json
+          echo "Imagem: $IMAGE@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo "CI run ID: $GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.event_name == 'push'
+        with:
+          name: release
+          path: release.json
+          retention-days: 90

@@ -1,0 +1,34 @@
+# Aplicar como administrador em cada namespace, não pelo pipeline.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crud-deployer
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: ['']
+    resources: [services]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: ['']
+    resources: [pods, events]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crud-deployer
+subjects:
+  - kind: Group
+    name: crud-deployers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: crud-deployer
+  apiGroup: rbac.authorization.k8s.io

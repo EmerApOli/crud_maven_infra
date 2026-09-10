@@ -1,0 +1,5 @@
+# Ponto de entrada da infraestrutura; kustomization.yaml referencia este arquivo por symlink.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - base

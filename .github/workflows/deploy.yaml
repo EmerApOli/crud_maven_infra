@@ -62,7 +62,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: github-${{ github.run_id }}
-      - uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede
+      - uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d
         with:
           version: v1.34.1
       - name: Acessar cluster EKS
